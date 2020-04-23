@@ -32,15 +32,21 @@ export default function (opts= {}) {
         app._router = routerConfig;
     } 
 
+    //这个对象是要传给combineReducer的， 用来合并， 每个属性都是字符串， 而且代表合并状态的一个分状态属性
+    let initialReducer = {
+        //当页面路径发生改变的时候， 会向仓库派发动作， 仓库状态发生改变
+        router: connectRouter(app._history)
+    }
+
     function start (container) {
-        let reducers = getReducers(app);
+        for( const model of app._models ) {
+            initialReducer[model.namespace] = getReducer(model)
+        }
+        let rootReucer = createReducer() //返回一个根的 reducer
+        // let reducers = getReducers(app);
         let sagas = getSagas(app);
-
-        
-        
-
         let sagaMiddleware = createSagaMiddleware();
-        app._store = applyMiddleware(routerMiddleware(history),sagaMiddleware)(createStore)(reducers)
+        app._store = applyMiddleware(routerMiddleware(history),sagaMiddleware)(createStore)(rootReucer)
 
         //对subscriptions执行逻辑 对应的源代码逻辑
         for(const model of aoo._models) {
@@ -54,22 +60,41 @@ export default function (opts= {}) {
         sagas.forEach(sagaMiddleware.run); //run 就是启动saga执行
         // app._store = createStore(store)
         ReactDOM.render( 
-           <Provider store={app._store}>
+           <Provider store={app._store}> 
                 <ConnectedRouter history={history}>
                     {app._router({history, history})}
                 </ConnectedRouter>     
            </Provider>,document.querySelector(container))
+           function createReducer() {
+               return combineReducers({
+                   ...initialReducer
+               })
+           }
+           
     }
     return app
 }
 
+function getReducer (model) {
+    let {reducers= {}, state: defaultState} = model
+    return function (state=defaultState, action) { 
+        let reducer = reducers[action.type]
+        if( reducer ) { 
+            return reducer(state, action)
+        }
+        return state
+    } 
+}
+
+
 //跟redux 类似， 这一函数就是吧各种 model里面的reducers对象转换成一个管理自己函数的reduce函数 进行合并
 function getReducers(app) {
     let reducers = {
+        //当页面路径发生改变的时候， 会向仓库派发动作， 仓库状态发生改变
         router: connectRouter(app._history)
     }
     for( const model of app._models ) {
-         reducers[model.namespace] = function (state=model.state, action) {
+         reducers[model.namespace] = function (state=m , action) {
              let model_reducers = model.reducers || {}
              let reducer = model_reducers[action.type]
              if( reducer ) {
