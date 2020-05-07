@@ -8,6 +8,8 @@ import createSagaMiddleware from 'redux-saga';
 import * as sagaEffects from 'redux-saga/effects';
 import { NAMESPACE_SEP } from './constant'
 import {routerMiddleware, connectRouter, ConnectedRouter} from  'connected-react-router'
+//plugin
+import Plugin, {filterHooks} from './plugins'
 export {connect}
 export default function (opts= {}) {
     let history = opts.history || createHashHistory()
@@ -18,7 +20,7 @@ export default function (opts= {}) {
         model,
         _router: null,
         router,
-        start,
+        start, 
     }
 
     function model(model){
@@ -38,6 +40,9 @@ export default function (opts= {}) {
         router: connectRouter(app._history)
     }
 
+    let plugin = new Plugin()
+    plugin.use(filterHooks(opts))
+    app.use = plugin.use.bind(plugin)
     function start (container) {
         for( const model of app._models ) {
             initialReducer[model.namespace] = getReducer(model)
@@ -46,15 +51,20 @@ export default function (opts= {}) {
         // let reducers = getReducers(app);
         let sagas = getSagas(app);
         let sagaMiddleware = createSagaMiddleware();
-        app._store = applyMiddleware(routerMiddleware(history),sagaMiddleware)(createStore)(rootReucer)
+
+        //让我们中件间生效
+        const extraMiddleWare = plugin.get('onAction')
+
+        app._store = applyMiddleware(routerMiddleware(history),sagaMiddleware,...extraMiddleWare)(createStore)(rootReucer)
 
         //对subscriptions执行逻辑 对应的源代码逻辑
-        for(const model of aoo._models) {
+        for(const model of app._models) {
             if( model.subscriptions ) {
-                for( let key in model.subscriptions ) {
-                    let subscription = model.subscription[key]
-                    subscription({history, dispatch: app._store.dispatch})
-                }
+                runSubscription(model.subscriptions )
+                // for( let key in model.subscriptions ) {
+                //     let subscription = model.subscriptions[key]
+                //     subscription({history, dispatch: app._store.dispatch})
+                // }
             }
         }
         sagas.forEach(sagaMiddleware.run); //run 就是启动saga执行
@@ -65,11 +75,61 @@ export default function (opts= {}) {
                     {app._router({history, history})}
                 </ConnectedRouter>     
            </Provider>,document.querySelector(container))
+
+        //实现dva/dynamic 懒加载的方法, 为当前应用插入一个模型 store, reducer subscriptions effects
+        app.model = injectModel.bind(app)
+        function injectModel (m) {
+            m = model(m) //给reducer 和 effect 名字添加命名空间前缀
+            initialReducer[m.namespace] = getReducer(m)
+            app._store.replaceReducer(createReducer() ) //用新的reducer 替换老得reducer
+            if (m.effects) {
+                sagaMiddleware.run(getSaga(m.effects, m)) //启动saga
+            }
+            if( m.subscriptions ) {
+                runSubscription(m.subscriptions)
+            }
+        }
+
+        // 
            function createReducer() {
+               let extraReducers = plugin.get('extraReducers')
                return combineReducers({
-                   ...initialReducer
+                   ...initialReducer,
+                   ...extraReducers
                })
            }
+
+        //整和 一开始的saga 和 懒加载中的saga
+        function runSubscription(subscriptions) {
+            for( let key in subscriptions ) {
+                let subscription = subscriptions[key]
+                subscription({history, dispatch: app._store.dispatch})
+            }
+        }
+
+        // 添加所有模型的saga
+           function getSagas (app) {
+            let sagas = [];
+            for( const model of app._models ) {
+                //把一个effects 转换成一个saga 
+                sagas.push(getSaga(model.effects, model,  plugin.get('onEffect')))
+            }
+            return sagas
+        }
+        //获取某个saga
+        function getSaga (effects, model) {
+            return  function* () {
+                for( const key in model.effects ) { 
+                    const watcher = getWatcher(key, model.effects[key], model, plugin.get('onEffect')) 
+                    //为什么调用fork, 是因为fork 不可单独开一个进程去执行， 而不是阻塞当前的saga的执行
+                    const task = yield sagaEffects.fork(watcher)
+                    yield sagaEffects.fork( function* () {
+                        yield sagaEffects.take(`${model.namespace}/@@CANCEL_EFFECTS`)
+                        yield sagaEffects.cancel(task)
+                    })
+                }
+            }
+        }   
            
     }
     return app
@@ -94,7 +154,7 @@ function getReducers(app) {
         router: connectRouter(app._history)
     }
     for( const model of app._models ) {
-         reducers[model.namespace] = function (state=m , action) {
+         reducers[model.namespace] = function (state, action) {
              let model_reducers = model.reducers || {}
              let reducer = model_reducers[action.type]
              if( reducer ) {
@@ -131,20 +191,20 @@ function getReducers(app) {
 
 
  //目的就是把 effects 转换成一个saga
-function getSagas (app) {
-    let sagas = [];
-    for( const model of app._models ) {
-        //把一个effects 转换成一个saga 
-        sagas.push( function* () {
-            for( const key in model.effects ) { 
-                const watcher = getWatcher(key, model.effects[key], model)
-                //为什么调用fork, 是因为fork 不可单独开一个进程去执行， 而不是阻塞当前的saga的执行
-                yield sagaEffects.fork(watcher)
-            }
-        })
-    }
-    return sagas
-}
+// function getSagas (app) {
+//     let sagas = [];
+//     for( const model of app._models ) {
+//         //把一个effects 转换成一个saga 
+//         sagas.push( function* () {
+//             for( const key in model.effects ) { 
+//                 const watcher = getWatcher(key, model.effects[key], model, plugin.get('onEffect')) 
+//                 //为什么调用fork, 是因为fork 不可单独开一个进程去执行， 而不是阻塞当前的saga的执行
+//                 yield sagaEffects.fork(watcher)
+//             }
+//         })
+//     }
+//     return sagas
+// }
 
 function prefixNamespace (model) {
     if( model.reducers ) {
@@ -169,7 +229,6 @@ function prefixNamespace (model) {
 
 
 function prefixType (type, model) {
-    console.log(type, "As")
     if( type.indexOf('/') == -1 ) {
         return `${model.namespace}${NAMESPACE_SEP}${type}`
     } else {
@@ -180,12 +239,18 @@ function prefixType (type, model) {
     return type
 }
 //订阅模式， 订阅方式是否被调用
-function getWatcher (key, effect, model) {
+function getWatcher (key, effect, model, onEffect ) {
     function put(action) {
         return sagaEffects.put({...action, type: prefixType(action.type, model)})
     }
     return function* () {
+        if( onEffect ) {
+            for( const fn of onEffect ) {
+                effect = fn(effect,{...sagaEffects, put},model,key)
+            }
+        }
         yield sagaEffects.takeEvery(key, function* (...args) {
+            
             yield effect(...args, {...sagaEffects, put} )
         })
     }

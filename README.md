@@ -66,3 +66,10 @@ This section has moved here: https://facebook.github.io/create-react-app/docs/de
 ### `yarn build` fails to minify
 
 This section has moved here: https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify
+
+
+# dva/dynamic 作用
+    初次加载页面下载体积小 其他页面用到的js会在下次请求后再下载，js 拆分
+
+# dva-loading
+    当我们异步发起saga的时候， 他可以根据我们是否请求完成从而给出 一个loading 的状态， 这个loading 是存在 state.loading.models.[napmespace]里面
