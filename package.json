@@ -10,7 +10,8 @@
     "react": "^16.13.1",
     "react-dom": "^16.13.1",
     "react-scripts": "3.4.1",
-    "redux-saga-effects": "^1.1.0"
+    "redux-saga-effects": "^1.1.0",
+    "redux-undo": "^1.0.1"
   },
   "scripts": {
     "start": "react-scripts start",
